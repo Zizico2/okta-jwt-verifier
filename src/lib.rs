@@ -1,38 +1,3 @@
-//! A helper library for working with JWT's for Okta.
-//!
-//! The purpose of this library is to help with the
-//! verification of access and ID tokens issued by Okta.
-//! See [`Verifier`] for more examples, and a
-//! [tide](https://github.com/http-rs/tide) middleware
-//! implementation in the repository under the examples directory.
-//!
-//! ### Minimal example
-//!
-//! ```no_run
-//! use okta_jwt_verifier::{Verifier, DefaultClaims};
-//!
-//! #[async_std::main]
-//! async fn main() -> anyhow::Result<()> {
-//!     let token = "token";
-//!     let issuer = "https://your.domain/oauth2/default";
-//!
-//!     Verifier::new(&issuer)
-//!         .await?
-//!         .verify::<DefaultClaims>(&token)
-//!         .await?;
-//!     Ok(())
-//! }
-//!```
-#![forbid(unsafe_code, future_incompatible)]
-#![deny(
-    missing_docs,
-    missing_debug_implementations,
-    missing_copy_implementations,
-    nonstandard_style,
-    unused_qualifications,
-    rustdoc::missing_doc_code_examples
-)]
-
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Result};
@@ -40,8 +5,6 @@ use jsonwebkey::JsonWebKey;
 use jsonwebtoken::{TokenData, Validation};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-#[cfg(feature = "disk-cache")]
-use http_cache_surf::{CACacheManager, Cache, CacheMode, HttpCache};
 
 /// Describes the default claims inside a decoded token
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,20 +79,9 @@ impl Jwks {
     }
 }
 
-// Builds a surf client configured to use a disk cache
-#[cfg(feature = "disk-cache")]
-fn build_client() -> surf::Client {
-    surf::Client::new().with(Cache(HttpCache {
-        mode: CacheMode::Default,
-        manager: CACacheManager::default(),
-        options: None,
-    }))
-}
 
-// Builds a default surf client
-#[cfg(not(feature = "disk-cache"))]
-fn build_client() -> surf::Client {
-    surf::Client::new()
+fn build_client() -> reqwest::Client {
+    reqwest::Client::new()
 }
 
 /// Attempts to retrieve the keys from an Okta issuer,
@@ -350,15 +302,14 @@ impl Verifier {
 // Attempts to retrieve the keys from the issuer
 async fn get(issuer: &str) -> Result<Jwks> {
     let url = format!("{}/v1/keys", &issuer);
-    let req = surf::get(&url);
-    let client = build_client();
-    let mut res = match client.send(req).await {
+    let req = reqwest::get(&url);
+    let res = match req.await {
         Ok(r) => r,
         Err(e) => {
             bail!(e)
         }
     };
-    let KeyResponse { keys } = match res.body_json().await {
+    let KeyResponse { keys } = match res.json().await {
         Ok(k) => k,
         Err(e) => {
             bail!(e)
@@ -369,78 +320,4 @@ async fn get(issuer: &str) -> Result<Jwks> {
         keymap.inner.insert(key.kid.clone(), key);
     }
     Ok(keymap)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use jwt_simple::prelude::*;
-    use mockito::mock;
-    #[derive(Debug, serde::Serialize)]
-    struct Res {
-        keys: Vec<Jwk>,
-    }
-
-    // Pulled test data from https://github.com/jedisct1/rust-jwt-simple/blob/master/src/lib.rs
-
-    const RSA_KP_PEM: &str = r"
------BEGIN RSA PRIVATE KEY-----
-MIIEpAIBAAKCAQEAyqq0N5u8Jvl+BLH2VMP/NAv/zY9T8mSq0V2Gk5Ql5H1a+4qi
-3viorUXG3AvIEEccpLsW85ps5+I9itp74jllRjA5HG5smbb+Oym0m2Hovfj6qP/1
-m1drQg8oth6tNmupNqVzlGGWZLsSCBLuMa3pFaPhoxl9lGU3XJIQ1/evMkOb98I3
-hHb4ELn3WGtNlAVkbP20R8sSii/zFjPqrG/NbSPLyAl1ctbG2d8RllQF1uRIqYQj
-85yx73hqQCMpYWU3d9QzpkLf/C35/79qNnSKa3t0cyDKinOY7JGIwh8DWAa4pfEz
-gg56yLcilYSSohXeaQV0nR8+rm9J8GUYXjPK7wIDAQABAoIBAQCpeRPYyHcPFGTH
-4lU9zuQSjtIq/+bP9FRPXWkS8bi6GAVEAUtvLvpGYuoGyidTTVPrgLORo5ncUnjq
-KwebRimlBuBLIR/Zboery5VGthoc+h4JwniMnQ6JIAoIOSDZODA5DSPYeb58n15V
-uBbNHkOiH/eoHsG/nOAtnctN/cXYPenkCfeLXa3se9EzkcmpNGhqCBL/awtLU17P
-Iw7XxsJsRMBOst4Aqiri1GQI8wqjtXWLyfjMpPR8Sqb4UpTDmU1wHhE/w/+2lahC
-Tu0/+sCWj7TlafYkT28+4pAMyMqUT6MjqdmGw8lD7/vXv8TF15NU1cUv3QSKpVGe
-50vlB1QpAoGBAO1BU1evrNvA91q1bliFjxrH3MzkTQAJRMn9PBX29XwxVG7/HlhX
-0tZRSR92ZimT2bAu7tH0Tcl3Bc3NwEQrmqKlIMqiW+1AVYtNjuipIuB7INb/TUM3
-smEh+fn3yhMoVxbbh/klR1FapPUFXlpNv3DJHYM+STqLMhl9tEc/I7bLAoGBANqt
-zR6Kovf2rh7VK/Qyb2w0rLJE7Zh/WI+r9ubCba46sorqkJclE5cocxWuTy8HWyQp
-spxzLP1FQlsI+MESgRLueoH3HtB9lu/pv6/8JlNjU6SzovfUZ0KztVUyUeB4vAcH
-pGcf2CkUtoYc8YL22Ybck3s8ThIdnY5zphCF55PtAoGAf46Go3c05XVKx78R05AD
-D2/y+0mnSGSzUjHPMzPyadIPxhltlCurlERhnwPGC4aNHFcvWTwS8kUGns6HF1+m
-JNnI1okSCW10UI/jTJ1avfwU/OKIBKKWSfi9cDJTt5cRs51V7pKnVEr6sy0uvDhe
-u+G091HuhwY9ak0WNtPwfJ8CgYEAuRdoyZQQso7x/Bj0tiHGW7EOB2n+LRiErj6g
-odspmNIH8zrtHXF9bnEHT++VCDpSs34ztuZpywnHS2SBoHH4HD0MJlszksbqbbDM
-1bk3+1bUIlEF/Hyk1jljn3QTB0tJ4y1dwweaH9NvVn7DENW9cr/aePGnJwA4Lq3G
-fq/IPlUCgYAuqgJQ4ztOq0EaB75xgqtErBM57A/+lMWS9eD/euzCEO5UzWVaiIJ+
-nNDmx/jvSrxA1Ih8TEHjzv4ezLFYpaJrTst4Mjhtx+csXRJU9a2W6HMXJ4Kdn8rk
-PBziuVURslNyLdlFsFlm/kfvX+4Cxrbb+pAGETtRTgmAoCDbvuDGRQ==
------END RSA PRIVATE KEY-----
-    ";
-
-    const KEY_ID: &str = "12345";
-
-    const RSA_MOD: &str = r"yqq0N5u8Jvl-BLH2VMP_NAv_zY9T8mSq0V2Gk5Ql5H1a-4qi3viorUXG3AvIEEccpLsW85ps5-I9itp74jllRjA5HG5smbb-Oym0m2Hovfj6qP_1m1drQg8oth6tNmupNqVzlGGWZLsSCBLuMa3pFaPhoxl9lGU3XJIQ1_evMkOb98I3hHb4ELn3WGtNlAVkbP20R8sSii_zFjPqrG_NbSPLyAl1ctbG2d8RllQF1uRIqYQj85yx73hqQCMpYWU3d9QzpkLf_C35_79qNnSKa3t0cyDKinOY7JGIwh8DWAa4pfEzgg56yLcilYSSohXeaQV0nR8-rm9J8GUYXjPK7w";
-
-    #[async_std::test]
-    async fn can_verify_token() -> Result<()> {
-        let key_pair = RS256KeyPair::from_pem(RSA_KP_PEM)?.with_key_id(KEY_ID);
-        let jsonwk = Jwk {
-            kty: "RSA".to_string(),
-            alg: "RS256".to_string(),
-            kid: KEY_ID.to_string(),
-            uses: "sig".to_string(),
-            e: "AQAB".to_string(),
-            n: RSA_MOD.to_string(),
-        };
-        let claims = Claims::create(Duration::from_hours(2))
-            .with_issuer(&mockito::server_url())
-            .with_subject("test");
-        let token = key_pair.sign(claims)?;
-        let res = Res { keys: vec![jsonwk] };
-        let m = mock("GET", "/v1/keys")
-            .with_status(200)
-            .with_body(serde_json::to_string(&res)?)
-            .create();
-        let verifier = Verifier::new(&mockito::server_url()).await?;
-        m.assert();
-        verifier.verify::<DefaultClaims>(&token).await?;
-        Ok(())
-    }
 }
